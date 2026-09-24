@@ -4,6 +4,7 @@
 //! Uses Windows process detection to find CSRF token
 
 mod cli_fallback;
+mod cli_resolution;
 mod legacy_status;
 mod local_proto;
 pub mod local_sessions;
@@ -24,7 +25,6 @@ use std::ffi::OsString;
 use std::future::Future;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::LazyLock;
 #[cfg(windows)]
@@ -481,7 +481,7 @@ impl AntigravityProvider {
     }
 
     async fn try_print_usage_fallback(&self) -> Result<Option<ProviderFetchResult>, ProviderError> {
-        cli_fallback::try_fetch(Self::locate_agy_binary()?).await
+        cli_fallback::try_fetch(cli_resolution::locate_agy_binary()?).await
     }
 
     /// Start a short-lived, headless `agy` session when neither the Antigravity
@@ -512,7 +512,7 @@ impl AntigravityProvider {
             Err(_) => return Err(Self::managed_agy_timeout()),
         }
 
-        let Some(binary) = Self::locate_agy_binary()? else {
+        let Some(binary) = cli_resolution::locate_agy_binary()? else {
             return Ok(ManagedAgyOutcome::Missing);
         };
         let probe_client = crate::core::credentialed_http_client_builder()
@@ -734,7 +734,7 @@ impl AntigravityProvider {
 
         #[cfg(windows)]
         if allow_managed_runtime {
-            match Self::locate_agy_binary() {
+            match cli_resolution::locate_agy_binary() {
                 Ok(binary) => {
                     if cli_fallback::managed_spawn_is_csrf_gated(binary).await {
                         tracing::debug!(
@@ -789,75 +789,6 @@ impl AntigravityProvider {
                 offline.ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()))
             }
         }
-    }
-
-    fn validate_agy_binary_override(
-        explicit: Option<PathBuf>,
-    ) -> Result<Option<PathBuf>, ProviderError> {
-        let Some(path) = explicit else {
-            return Ok(None);
-        };
-        if path.is_file() {
-            Ok(Some(path))
-        } else {
-            Err(ProviderError::NotInstalled(format!(
-                "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file: {}. Fix or unset the variable; automatic CLI discovery is disabled while it is set.",
-                path.display()
-            )))
-        }
-    }
-
-    fn locate_agy_binary() -> Result<Option<PathBuf>, ProviderError> {
-        Self::resolve_agy_binary(
-            std::env::var_os("ANTIGRAVITY_CLI_PATH").map(PathBuf::from),
-            || {
-                Self::agy_binary_candidates(
-                    None,
-                    which::which("agy").ok(),
-                    std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-                    dirs::home_dir(),
-                )
-            },
-        )
-    }
-
-    fn resolve_agy_binary<F>(
-        explicit: Option<PathBuf>,
-        discover: F,
-    ) -> Result<Option<PathBuf>, ProviderError>
-    where
-        F: FnOnce() -> Vec<PathBuf>,
-    {
-        if let Some(path) = Self::validate_agy_binary_override(explicit)? {
-            return Ok(Some(path));
-        }
-        Ok(discover().into_iter().find(|path| path.is_file()))
-    }
-
-    fn agy_binary_candidates(
-        explicit: Option<PathBuf>,
-        path_lookup: Option<PathBuf>,
-        local_app_data: Option<PathBuf>,
-        home: Option<PathBuf>,
-    ) -> Vec<PathBuf> {
-        let mut candidates = Vec::new();
-        if let Some(path) = explicit {
-            candidates.push(path);
-        }
-        if let Some(path) = path_lookup {
-            candidates.push(path);
-        }
-        if let Some(root) = local_app_data {
-            candidates.push(root.join("agy").join("bin").join("agy.exe"));
-        }
-        if let Some(root) = home {
-            candidates.push(root.join(".local").join("bin").join(if cfg!(windows) {
-                "agy.exe"
-            } else {
-                "agy"
-            }));
-        }
-        candidates
     }
 
     async fn fetch_local_payload(
