@@ -298,6 +298,52 @@ fn managed_agy_candidates_prefer_override_then_path_then_known_installs() {
     );
 }
 
+#[test]
+fn usable_agy_override_is_selected_without_discovery() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let override_path = temp.path().join("configured-agy.exe");
+    std::fs::write(&override_path, b"test executable placeholder").expect("write fixture");
+
+    let resolved = AntigravityProvider::resolve_agy_binary(Some(override_path.clone()), || {
+        panic!("a configured override must not trigger automatic discovery")
+    })
+    .expect("usable override should resolve");
+
+    assert_eq!(resolved, Some(override_path));
+}
+
+#[test]
+fn unusable_agy_override_fails_without_automatic_discovery() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let missing_override = temp.path().join("missing-agy.exe");
+
+    let error = AntigravityProvider::resolve_agy_binary(Some(missing_override), || {
+        panic!("an invalid configured override must block automatic discovery")
+    })
+    .expect_err("invalid override should fail closed");
+
+    let message = error.to_string();
+    assert!(message.contains("ANTIGRAVITY_CLI_PATH is set"));
+    assert!(message.contains("automatic CLI discovery is disabled"));
+}
+
+#[test]
+fn unset_agy_override_preserves_automatic_discovery() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let discovered_path = temp.path().join("discovered-agy.exe");
+    std::fs::write(&discovered_path, b"test executable placeholder").expect("write fixture");
+
+    let resolved = AntigravityProvider::resolve_agy_binary(None, || {
+        vec![
+            temp.path().join("missing-first.exe"),
+            discovered_path.clone(),
+        ]
+    })
+    .expect("automatic discovery should resolve");
+
+    assert_eq!(resolved, Some(discovered_path));
+}
+
 // ── Managed lifecycle policy (fake outcomes) ───────────────────────
 //
 // The process lifecycle itself is covered by `crate::managed_process`; these
@@ -641,6 +687,32 @@ async fn local_probe_success_does_not_run_structured_cli_fallback() {
 }
 
 #[tokio::test]
+async fn local_probe_success_wins_over_an_invalid_cli_override() {
+    let provider = AntigravityProvider::new();
+    let fallback_called = Arc::new(AtomicBool::new(false));
+    let marker = Arc::clone(&fallback_called);
+    let local = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(10.0)), "local");
+
+    let result = provider
+        .resolve_runtime_fallback_with_offline(
+            Ok(Some(local)),
+            move || async move {
+                marker.store(true, Ordering::SeqCst);
+                Err(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but unusable".to_string(),
+                ))
+            },
+            Some(offline_result()),
+        )
+        .await
+        .expect("successful local desktop probe must remain authoritative");
+
+    assert_eq!(result.source_label, "local");
+    assert_eq!(result.usage.primary.used_percent, 10.0);
+    assert!(!fallback_called.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn local_auth_probe_failure_uses_structured_cli_fallback() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async {
@@ -699,8 +771,8 @@ async fn cli_fallback_error_prefers_offline_history() {
         .resolve_runtime_fallback_with_offline(
             Err(ProviderError::AuthRequired),
             || async {
-                Err(ProviderError::Parse(
-                    "Antigravity CLI usage report: malformed JSON".to_string(),
+                Err(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
                 ))
             },
             Some(offline_result()),

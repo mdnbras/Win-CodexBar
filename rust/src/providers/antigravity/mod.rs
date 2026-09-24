@@ -481,7 +481,7 @@ impl AntigravityProvider {
     }
 
     async fn try_print_usage_fallback(&self) -> Result<Option<ProviderFetchResult>, ProviderError> {
-        cli_fallback::try_fetch(Self::locate_agy_binary()).await
+        cli_fallback::try_fetch(Self::locate_agy_binary()?).await
     }
 
     /// Start a short-lived, headless `agy` session when neither the Antigravity
@@ -512,7 +512,7 @@ impl AntigravityProvider {
             Err(_) => return Err(Self::managed_agy_timeout()),
         }
 
-        let Some(binary) = Self::locate_agy_binary() else {
+        let Some(binary) = Self::locate_agy_binary()? else {
             return Ok(ManagedAgyOutcome::Missing);
         };
         let probe_client = crate::core::credentialed_http_client_builder()
@@ -734,25 +734,34 @@ impl AntigravityProvider {
 
         #[cfg(windows)]
         if allow_managed_runtime {
-            if cli_fallback::managed_spawn_is_csrf_gated(Self::locate_agy_binary()).await {
-                tracing::debug!(
-                    "skipping managed agy readiness wait because the local server requires CSRF"
-                );
-            } else {
-                match self.fetch_with_managed_agy().await {
-                    Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
-                    Ok(ManagedAgyOutcome::Fetched(mut result)) => {
-                        result.source_label = AntigravityStrategyId::Cli.as_str().to_string();
-                        return Ok(result);
-                    }
-                    Ok(ManagedAgyOutcome::Missing) => {}
-                    Err(error) => {
-                        if matches!(error, ProviderError::AuthRequired) {
-                            return Err(error);
+            match Self::locate_agy_binary() {
+                Ok(binary) => {
+                    if cli_fallback::managed_spawn_is_csrf_gated(binary).await {
+                        tracing::debug!(
+                            "skipping managed agy readiness wait because the local server requires CSRF"
+                        );
+                    } else {
+                        match self.fetch_with_managed_agy().await {
+                            Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
+                            Ok(ManagedAgyOutcome::Fetched(mut result)) => {
+                                result.source_label =
+                                    AntigravityStrategyId::Cli.as_str().to_string();
+                                return Ok(result);
+                            }
+                            Ok(ManagedAgyOutcome::Missing) => {}
+                            Err(error) => {
+                                if matches!(error, ProviderError::AuthRequired) {
+                                    return Err(error);
+                                }
+                                tracing::debug!(%error, "managed Antigravity CLI probe failed");
+                                failure = Some(error);
+                            }
                         }
-                        tracing::debug!(%error, "managed Antigravity CLI probe failed");
-                        failure = Some(error);
                     }
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "managed Antigravity CLI resolution failed");
+                    failure = Some(error);
                 }
             }
         }
@@ -782,14 +791,47 @@ impl AntigravityProvider {
         }
     }
 
-    fn locate_agy_binary() -> Option<PathBuf> {
-        let candidates = Self::agy_binary_candidates(
+    fn validate_agy_binary_override(
+        explicit: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, ProviderError> {
+        let Some(path) = explicit else {
+            return Ok(None);
+        };
+        if path.is_file() {
+            Ok(Some(path))
+        } else {
+            Err(ProviderError::NotInstalled(format!(
+                "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file: {}. Fix or unset the variable; automatic CLI discovery is disabled while it is set.",
+                path.display()
+            )))
+        }
+    }
+
+    fn locate_agy_binary() -> Result<Option<PathBuf>, ProviderError> {
+        Self::resolve_agy_binary(
             std::env::var_os("ANTIGRAVITY_CLI_PATH").map(PathBuf::from),
-            which::which("agy").ok(),
-            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            dirs::home_dir(),
-        );
-        candidates.into_iter().find(|path| path.is_file())
+            || {
+                Self::agy_binary_candidates(
+                    None,
+                    which::which("agy").ok(),
+                    std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+                    dirs::home_dir(),
+                )
+            },
+        )
+    }
+
+    fn resolve_agy_binary<F>(
+        explicit: Option<PathBuf>,
+        discover: F,
+    ) -> Result<Option<PathBuf>, ProviderError>
+    where
+        F: FnOnce() -> Vec<PathBuf>,
+    {
+        if let Some(path) = Self::validate_agy_binary_override(explicit)? {
+            return Ok(Some(path));
+        }
+        Ok(discover().into_iter().find(|path| path.is_file()))
     }
 
     fn agy_binary_candidates(
