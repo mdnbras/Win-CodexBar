@@ -88,6 +88,7 @@ pub enum ProviderId {
     Notion,
     Xai,
     Fireworks,
+    AtlasCloud,
     #[serde(alias = "metaspark")]
     Meta,
     Muse,
@@ -175,6 +176,7 @@ impl ProviderId {
             ProviderId::Notion,
             ProviderId::Xai,
             ProviderId::Fireworks,
+            ProviderId::AtlasCloud,
             ProviderId::Meta,
             ProviderId::Muse,
             ProviderId::Replicate,
@@ -265,6 +267,7 @@ impl ProviderId {
             ProviderId::Notion => "notion",
             ProviderId::Xai => "xai",
             ProviderId::Replicate => "replicate",
+            ProviderId::AtlasCloud => "atlascloud",
         }
     }
 
@@ -353,6 +356,7 @@ impl ProviderId {
             ProviderId::Notion => "Notion AI",
             ProviderId::Xai => "xAI",
             ProviderId::Replicate => "Replicate",
+            ProviderId::AtlasCloud => "Atlas Cloud",
         }
     }
 
@@ -395,6 +399,7 @@ impl ProviderId {
             ProviderId::Sakana => Some("console.sakana.ai"),
             ProviderId::LongCat => Some("longcat.chat"),
             ProviderId::Replicate => Some("replicate.com"),
+            ProviderId::AtlasCloud => None,
             // Token-based providers (don't use cookies)
             ProviderId::Copilot => None,
             ProviderId::Zai => None,
@@ -546,6 +551,7 @@ impl ProviderId {
             "zoommate" | "zoom-mate" | "zoom mate" => Some(ProviderId::ZoomMate),
             "notion" | "notion-ai" | "notionai" | "notion ai" => Some(ProviderId::Notion),
             "replicate" | "r8" => Some(ProviderId::Replicate),
+            "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
             _ => None,
         }
     }
@@ -1105,6 +1111,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Meta => "#0467DF",
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
+        ProviderId::AtlasCloud => "#5975F5",
         ProviderId::Nous => "#D6A55C",
     }
 }
@@ -1120,7 +1127,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 80);
+        assert_eq!(all.len(), 81);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1181,6 +1188,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Replicate));
         assert!(all.contains(&ProviderId::Muse));
         assert!(all.contains(&ProviderId::Nous));
+        assert!(all.contains(&ProviderId::AtlasCloud));
     }
 
     #[test]
